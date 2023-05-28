@@ -1,5 +1,12 @@
+import os
+path = os.path.abspath(__file__)
+dir_path = os.path.dirname(path)
+import sys
+sys.path.append('../../../')
+
 from json import dumps
 
+import numpy as np
 import torch
 
 from deepproblog.dataset import DataLoader
@@ -13,6 +20,9 @@ from deepproblog.train import train_model
 
 method = "exact"
 N = 1
+epochs = 5
+batch_size = 1_000
+learning_rate = 1e-3
 
 name = "addition_{}_{}".format(method, N)
 
@@ -25,7 +35,7 @@ pretrain = 0
 if pretrain is not None and pretrain > 0:
     network.load_state_dict(torch.load("models/pretrained/all_{}.pth".format(pretrain)))
 net = Network(network, "mnist_net", batching=True)
-net.optimizer = torch.optim.Adam(network.parameters(), lr=1e-3)
+net.optimizer = torch.optim.Adam(network.parameters(), lr=learning_rate)
 
 model = Model("models/addition.pl", [net])
 if method == "exact":
@@ -38,11 +48,17 @@ elif method == "geometric_mean":
 model.add_tensor_source("train", MNIST_train)
 model.add_tensor_source("test", MNIST_test)
 
-loader = DataLoader(train_set, 2, False)
-train = train_model(model, loader, 1, log_iter=100, profile=0)
-model.save_state("snapshot/" + name + ".pth")
-train.logger.comment(dumps(model.get_hyperparameters()))
-train.logger.comment(
-    "Accuracy {}".format(get_confusion_matrix(model, test_set, verbose=1).accuracy())
-)
-train.logger.write_to_file("log/" + name)
+loader = DataLoader(train_set, batch_size, False)
+queries = test_set.to_queries()
+test_queries = [q.variable_output() for q in queries]
+print(f"Dataset size = {loader.length} / Batch size = {loader.batch_size}")
+print(f"Queries size = {len(queries)}")
+print(f'Start training for {epochs} epoch(s)...')
+train = train_model(model, loader, epochs, queries, test_queries, log_iter=1, verbose=1, profile=0)
+train.save_accuracy('addition.npy')
+#model.save_state("snapshot/" + name + ".pth")
+#train.logger.comment(dumps(model.get_hyperparameters()))
+#train.logger.comment(
+#    "Accuracy {}".format(get_confusion_matrix(model, test_set, verbose=1).accuracy())
+#)
+#train.logger.write_to_file("log/" + name)
