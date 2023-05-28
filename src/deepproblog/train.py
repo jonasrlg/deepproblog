@@ -9,7 +9,6 @@ from deepproblog.utils.logger import Logger
 from deepproblog.utils.stop_condition import EpochStop
 from deepproblog.utils.stop_condition import StopCondition
 
-
 class TrainObject(object):
     """
     An object that performs the training of the model and keeps track of the state of the training.
@@ -27,6 +26,7 @@ class TrainObject(object):
         self.interrupt = False
         self.hooks = []
         self.timing = [0, 0, 0]
+        self.accuracy = None
 
     def get_loss(self, batch: List[Query], backpropagate_loss: Callable) -> float:
         """
@@ -80,11 +80,38 @@ class TrainObject(object):
                     r, 0, weight=1 / (len(result) * len(neg_proofs)), q=neg
                 )
         return total_loss
+    
+    def get_accuracy(self, queries: List[Query], test_queries: List[Query]) -> float:
+        """
+        Calculates the accuracy for a given list of queries.
+        :param queries: The batch of queries.
+        :param backpropagate_loss:  The loss function. It should also perform the backpropagation.
+        :return: The accuracy over the queries
+        """
+
+        correct = 0
+        answer = self.model.solve(test_queries)
+        actual = [str(q.output_values()[0]) for q in queries]
+        max_ans = [max(a.result, key=lambda x: a.result[x]) for a in answer]
+        predicted = [str(m.args[q.output_ind[0]]) for m, q in zip(max_ans, queries)]
+
+        for pred, act in zip(predicted, actual):
+            if pred == act:
+                correct += 1
+                
+        print('Correct =', correct)
+        accuracy = 100. * correct / len(queries)
+
+        print('Accuracy =', accuracy)
+
+        return accuracy
 
     def train(
         self,
         loader: DataLoader,
         stop_criterion: Union[int, StopCondition],
+        queries:List[Query],
+        test_queries:List[Query],
         verbose: int = 1,
         loss_function_name: str = "cross_entropy",
         with_negatives: bool = False,
@@ -102,13 +129,18 @@ class TrainObject(object):
         self.start = time.time()
         self.prev_iter_time = time.time()
         epoch_size = len(loader)
+
         if "test" in kwargs and initial_test:
             value = kwargs["test"](self.model)
             self.logger.log_list(self.i, value)
             print("Test: ", value)
 
+        self.model.train()
+        accuracy = [self.get_accuracy(queries, test_queries)]
+
         if type(stop_criterion) is int:
             stop_criterion = EpochStop(stop_criterion)
+        
         print("Training ", stop_criterion)
 
         while not (stop_criterion.is_stop(self) or self.interrupt):
@@ -130,6 +162,10 @@ class TrainObject(object):
 
                 self.model.optimizer.step()
                 self.log(verbose=verbose, log_iter=log_iter, **kwargs)
+                
+                # Calculates accuracy after optimization step
+                accuracy.append(self.get_accuracy(queries, test_queries))
+
                 for j, hook in self.hooks:
                     if self.i % j == 0:
                         hook(self)
@@ -145,6 +181,9 @@ class TrainObject(object):
             self.model.save_state(filename)
 
         signal.signal(signal.SIGINT, self.previous_handler)
+
+        self.accuracy = accuracy
+        
         return self.logger
 
     def log(
@@ -189,13 +228,19 @@ class TrainObject(object):
     def write_to_file(self, *args, **kwargs):
         self.logger.write_to_file(*args, **kwargs)
 
+    def save_accuracy(self, path):
+        import numpy as np
+        return np.save(path, np.array(self.accuracy))
+
 
 def train_model(
     model: Model,
     loader: DataLoader,
     stop_condition: Union[int, StopCondition],
+    queries:List[Query],
+    test_queries:List[Query],
     **kwargs
 ) -> TrainObject:
     train_object = TrainObject(model)
-    train_object.train(loader, stop_condition, **kwargs)
+    train_object.train(loader, stop_condition, queries, test_queries, **kwargs)
     return train_object
