@@ -6,6 +6,42 @@ from deepproblog.dataset import Dataset
 from deepproblog.model import Model
 from deepproblog.utils.confusion_matrix import ConfusionMatrix
 
+import torch
+from torch.utils.data import DataLoader
+import sys
+from typing import List
+
+
+def get_nn_accuracy(model: Model, dataloader: List[DataLoader], verbose: int = 0) -> float:
+    model.eval()
+    accuracy_nn = []
+    for i, (nn, loader) in enumerate(zip(model.networks.values(), dataloader)):
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for data, target in loader:
+                output = nn.network_module(data)
+                if target.shape == output.shape[:-1]:
+                    pred = output.argmax(dim=-1) # get the index of the max value
+                elif target.shape == output.shape:
+                    pred = (output >= 0.5).int()
+                else:
+                    print(f'Error: none considered case for output with shape {output.shape} v.s. label with shape {target.shape}')
+                    sys.exit()
+                target = target.view_as(pred)
+                correctionMatrix = (target.int() == pred.int()).view(target.shape[0], -1)
+                correct += correctionMatrix.all(1).sum().item()
+                total += target.shape[0]
+
+        accuracy = 100. * correct / total
+        accuracy_nn.append(accuracy)
+
+        if verbose > 0:
+            print(f"Neural Net {i} accuracy", accuracy)
+
+        return accuracy_nn
+
+
 
 def get_confusion_matrix(
     model: Model, dataset: Dataset, verbose: int = 0, eps: Optional[float] = None
